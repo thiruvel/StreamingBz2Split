@@ -1,0 +1,155 @@
+# Copyright (c) 2012 Yahoo! Inc. All rights reserved.
+# Copyrights licensed under the New BSD License. See the accompanying LICENSE file for terms.
+
+Streaming BZip2 Splitter
+------------------------
+
+This tool has been written by me to solve Hadoop's problem. Hadoop cannot split bz2 files until 0.23. Some folks attempted to backport the patch to
+Hadoop 20 but its not stable, not available.
+
+This is a simple tool which given one/more bz2 files, uses the bzip tools to split it into multiple smaller files. The size of the smaller chunks/number
+of chunks to split can be configured. During splitting, the tool ensures that records are properly split among the chunks, i.e. a single record is only
+available in one of the chunks and this is specially taken care. It can work only if the record boundary is '\n'. The splitting happens fast even for
+large text files because it does not attempt to decompress the whole file, instead it only decompresses parts of the file required to handle record
+boundaries.
+
+Works with:
+	Text files, bz2 compressed and record boundary '\n'
+
+Generates:
+	Smaller files with same data but gzip compressed.
+
+We use bzip2recover and generate smaller files and concatenate them into larger files. Now Hadoop does not understand such files and reads only a
+smaller portion of them. So, to fix them the bzip2 header of the chunks should be fixed. Thats a little tricky and to get around the problem, I
+bunzip them (yes bzip tools understand such formats) and gzip them - both of them are pretty fast.
+
+Drivers have been written to run the same logic on multiple files using Hadoop Streaming. The scripts takes a directory of bz2 files, splits them
+based on size/chunks, verifies them and launches another job to gzip them. All along, the number of mappers can be controlled.
+
+Here is a sample usage of the script:
+
+[thiruvel@localhost StreamingBz2Split]$ ./run.sh -h
+
+./run.sh: [-t] [-c <chunk size> | -n <number of chunks>] [-v] [-m no_maps] -i input_dir -o output_dir
+        -t - Verify integrity of the input bzip2 files. OFF by default.
+        -c - Chunk size of each bzip2 split in MB, final size of gzip files may vary. 4 by default.
+        -n - Number of chunks to be generated, mutually exclusive to -c. Disabled by default.
+        -v - Verify rowcounts between input and output - OFF by default.
+        -m - Number of Maps to be launched, default number of maps = number of files.
+        -i - Input dir. The directory should exist and contain bz2 files. Other files will be ignored.
+        -o - Output dir. The directory will be cleaned if it exists and the output split files in .gz
+             format will be placed here. It will also be used as a scratch directory.
+        -h - Print usage
+
+
+Example:
+--------
+
+Input:
+~~~~~
+[thiruvel@localhost StreamingBz2Split]$ hadoop fs -ls /tmp/input
+Found 1 items
+-rw-r--r--   1 thiruvel supergroup   66410623 2012-03-16 03:09 /tmp/input/cobaltblue.bz2
+[thiruvel@localhost StreamingBz2Split]$ 
+
+Execution:
+~~~~~~~~~~
+
+Split into 8 chunks: $./run.sh -i /tmp/input -o /tmp/output -n 8
+Split into chunks of size approx. 4MB: $./run.sh -i /tmp/input -o /tmp/output -c 4
+
+Sample run:
+~~~~~~~~~~~
+
+[thiruvel@localhost StreamingBz2Split]$ ./run.sh -i /tmp/input -o /tmp/output -n 8
+
+Deleted hdfs://localhost.:8020/tmp/output
+
+/tmp/input/cobaltblue.bz2:/tmp/output/bz2out
+
+packageJobJar: [splitFile.sh, splitBzip2.sh, verifyRecordCount.sh, /home/thiruvel/cluster/tmp/hadoop-unjar1287667628951594655/] [] /tmp/streamjob3293762976681085942.jar tmpDir=null
+12/03/26 04:15:53 INFO mapred.FileInputFormat: Total input paths to process : 1
+12/03/26 04:15:53 INFO streaming.StreamJob: getLocalDirs(): [/home/thiruvel/cluster/tmp/mapred/local]
+12/03/26 04:15:53 INFO streaming.StreamJob: Running job: job_201201082309_1228
+12/03/26 04:15:53 INFO streaming.StreamJob: To kill this job, run:
+12/03/26 04:15:53 INFO streaming.StreamJob: hadoop-0.20.205.0.3.1112071329/libexec/../bin/hadoop job  -Dmapred.job.tracker=localhost:50300 -kill job_201201082309_1228
+12/03/26 04:15:53 INFO streaming.StreamJob: Tracking URL: http://localhost:50030/jobdetails.jsp?jobid=job_201201082309_1228
+12/03/26 04:15:54 INFO streaming.StreamJob:  map 0%  reduce 0%
+12/03/26 04:16:10 INFO streaming.StreamJob:  map 100%  reduce 0%
+12/03/26 04:16:43 INFO streaming.StreamJob:  map 100%  reduce 100%
+12/03/26 04:16:43 INFO streaming.StreamJob: Job complete: job_201201082309_1228
+12/03/26 04:16:43 INFO streaming.StreamJob: Output: /tmp/output/hadoop_streaming_todelete
+
+Deleted hdfs://localhost:8020/tmp/output/hadoop_streaming_todelete
+Deleted hdfs://localhost:8020/tmp/output/scratchstreaming
+
+-rw-r--r--   1 thiruvel supergroup    9096899 2012-03-26 04:16 /tmp/output/bz2out/chunk-1-cobaltblue.bz2
+-rw-r--r--   1 thiruvel supergroup    8761934 2012-03-26 04:16 /tmp/output/bz2out/chunk-2-cobaltblue.bz2
+-rw-r--r--   1 thiruvel supergroup    8523903 2012-03-26 04:16 /tmp/output/bz2out/chunk-3-cobaltblue.bz2
+-rw-r--r--   1 thiruvel supergroup    8869790 2012-03-26 04:16 /tmp/output/bz2out/chunk-4-cobaltblue.bz2
+-rw-r--r--   1 thiruvel supergroup    8580745 2012-03-26 04:16 /tmp/output/bz2out/chunk-5-cobaltblue.bz2
+-rw-r--r--   1 thiruvel supergroup    8496121 2012-03-26 04:16 /tmp/output/bz2out/chunk-6-cobaltblue.bz2
+-rw-r--r--   1 thiruvel supergroup    8854693 2012-03-26 04:16 /tmp/output/bz2out/chunk-7-cobaltblue.bz2
+-rw-r--r--   1 thiruvel supergroup    5272162 2012-03-26 04:16 /tmp/output/bz2out/chunk-8-cobaltblue.bz2
+
+/tmp/output/bz2out/chunk-1-cobaltblue.bz2:/tmp/output
+/tmp/output/bz2out/chunk-2-cobaltblue.bz2:/tmp/output
+/tmp/output/bz2out/chunk-3-cobaltblue.bz2:/tmp/output
+/tmp/output/bz2out/chunk-4-cobaltblue.bz2:/tmp/output
+/tmp/output/bz2out/chunk-5-cobaltblue.bz2:/tmp/output
+/tmp/output/bz2out/chunk-6-cobaltblue.bz2:/tmp/output
+/tmp/output/bz2out/chunk-7-cobaltblue.bz2:/tmp/output
+/tmp/output/bz2out/chunk-8-cobaltblue.bz2:/tmp/output
+
+packageJobJar: [createGzipFromBzip.sh, /home/thiruvel/cluster/tmp/hadoop-unjar4063740201930314043/] [] /tmp/streamjob4343584794179189004.jar tmpDir=null
+12/03/26 04:16:48 INFO mapred.FileInputFormat: Total input paths to process : 1
+12/03/26 04:16:49 INFO streaming.StreamJob: getLocalDirs(): [/home/thiruvel/cluster/tmp/mapred/local]
+12/03/26 04:16:49 INFO streaming.StreamJob: Running job: job_201201082309_1229
+12/03/26 04:16:49 INFO streaming.StreamJob: To kill this job, run:
+12/03/26 04:16:49 INFO streaming.StreamJob: hadoop-0.20.205.0.3.1112071329/libexec/../bin/hadoop job  -Dmapred.job.tracker=localhost:50300 -kill job_201201082309_1229
+12/03/26 04:16:49 INFO streaming.StreamJob: Tracking URL: http://localhost:50030/jobdetails.jsp?jobid=job_201201082309_1229
+12/03/26 04:16:50 INFO streaming.StreamJob:  map 0%  reduce 0%
+12/03/26 04:17:05 INFO streaming.StreamJob:  map 13%  reduce 0%
+12/03/26 04:17:08 INFO streaming.StreamJob:  map 25%  reduce 0%
+12/03/26 04:18:08 INFO streaming.StreamJob:  map 38%  reduce 0%
+12/03/26 04:18:11 INFO streaming.StreamJob:  map 50%  reduce 0%
+12/03/26 04:18:53 INFO streaming.StreamJob:  map 63%  reduce 0%
+12/03/26 04:18:56 INFO streaming.StreamJob:  map 75%  reduce 0%
+12/03/26 04:19:47 INFO streaming.StreamJob:  map 88%  reduce 0%
+12/03/26 04:19:50 INFO streaming.StreamJob:  map 100%  reduce 0%
+12/03/26 04:20:14 INFO streaming.StreamJob:  map 100%  reduce 100%
+12/03/26 04:20:14 INFO streaming.StreamJob: Job complete: job_201201082309_1229
+12/03/26 04:20:14 INFO streaming.StreamJob: Output: /tmp/output/hadoop_streaming_todelete
+
+Deleted hdfs://localhost:8020/tmp/output/bz2out
+Deleted hdfs://localhost:8020/tmp/output/hadoop_streaming_todelete
+Deleted hdfs://localhost:8020/tmp/output/scratchstreaming
+
+-rw-r--r--   1 thiruvel supergroup   17282201 2012-03-26 04:17 /tmp/output/chunk-1-cobaltblue.gz
+-rw-r--r--   1 thiruvel supergroup   16683234 2012-03-26 04:17 /tmp/output/chunk-2-cobaltblue.gz
+-rw-r--r--   1 thiruvel supergroup   16506643 2012-03-26 04:18 /tmp/output/chunk-3-cobaltblue.gz
+-rw-r--r--   1 thiruvel supergroup   17012086 2012-03-26 04:18 /tmp/output/chunk-4-cobaltblue.gz
+-rw-r--r--   1 thiruvel supergroup   16463777 2012-03-26 04:19 /tmp/output/chunk-5-cobaltblue.gz
+-rw-r--r--   1 thiruvel supergroup   16322551 2012-03-26 04:19 /tmp/output/chunk-6-cobaltblue.gz
+-rw-r--r--   1 thiruvel supergroup   17030241 2012-03-26 04:20 /tmp/output/chunk-7-cobaltblue.gz
+-rw-r--r--   1 thiruvel supergroup   10128594 2012-03-26 04:19 /tmp/output/chunk-8-cobaltblue.gz
+[thiruvel@localhost StreamingBz2Split]$ 
+
+FAQ:
+----
+1. Is there any way to turn off the verbosity?
+Set DEBUG env. variable to 0 and run the script.
+
+2. Is there no other way to read bz2 files in Hadoop without this script?
+Pig can read and process bz2 files in parallel, but the limitation is that the data should be on a directory whose name should end with '.bz2'.
+Not many directories on HDFS are in this format and it would have been nice if Pig supports a way to use a regular directory with bz2 files with a knob.
+
+
+
+Start using this script at your own risk - tools provided to validate data and you can use your own validators too.
+
+Please email me your feedbacks if any.
+
+Thanks!
+Thiruvel
+@thiruvel
